@@ -2,21 +2,22 @@
 
     """
 
-import asyncio
+from pathlib import Path
 
 import pandas as pd
-from githubdata import GithubData
-from mirutil.async_requests import get_reps_texts_async
-from mirutil.df_utils import save_as_prq_wo_index as sprq
 from mirutil.utils import ret_clusters_indices
 
+from githubdata import GitHubDataRepo
+from mirutil.ns import rm_ns_module
+from mirutil.ns import update_ns_module
+from mirutil.async_req import get_resps_async_sync
+from mirutil.df import save_as_prq_wo_index
 
-class GDUrl :
-    cur = 'https://github.com/imahdimir/u-d-TSETMC_ID-Shenase'
-    trg = 'https://github.com/imahdimir/d-TSETMC_ID-Shenase'
-    src = 'https://github.com/imahdimir/d-TSETMC_ID-2-FirmTicker'
+update_ns_module()
+import ns
 
-gu = GDUrl()
+gdu = ns.GDU()
+c = ns.Col()
 
 class Constant :
     burl = 'http://tsetmc.com/Loader.aspx?Partree=15131M&i='
@@ -25,14 +26,14 @@ cte = Constant()
 
 class ColName :
     url = 'url'
-    tid = 'TSETMC_ID'
     res = 'res'
-    ftic = 'FirmTicker'
-    obsd = 'ObsDate'
 
-c = ColName()
+cn = ColName()
 
-fu0 = get_reps_texts_async
+class FilePath :
+    t0 = Path('temp0.prq')
+
+fp = FilePath()
 
 def get_df_4_each_ro(res) :
     dfs = pd.read_html(res)
@@ -43,24 +44,29 @@ def main() :
     pass
 
     ##
+
     # 1. Get the list of all the firms
-    gd_src = GithubData(gu.src)
-    gd_src.overwriting_clone()
+
+    gd_src = GitHubDataRepo(gdu.src)
+    gd_src.clone_overwrite()
 
     ##
-    ds = gd_src.read_data()
-    ds = ds.astype(str)
-    ##
-    ds[c.url] = cte.burl + ds[c.tid]
+    df = gd_src.read_data()
+    df = df.astype(str)
 
     ##
-    ds[c.res] = None
+    df[cn.url] = cte.burl + df[c.tse_id]
+
     ##
-    df1 = ds.copy()
+    df[cn.res] = None
+
+    ##
+    df1 = df.copy()
+
     ##
     while not df1.empty :
-        msk = ds[c.res].isna()
-        df1 = ds[msk]
+        msk = df[cn.res].isna()
+        df1 = df[msk]
         print(len(df1))
 
         clus = ret_clusters_indices(df1)
@@ -68,82 +74,91 @@ def main() :
             si , ei = se
             print(se)
 
-            inds = df1.iloc[si :ei].index
+            inds = df1.iloc[si : ei].index
 
-            urls = df1.loc[inds , c.url]
+            urls = df1.loc[inds , cn.url]
 
-            ou = asyncio.run(fu0(urls))
+            ou = get_resps_async_sync(urls)
 
-            ds.loc[inds , c.res] = ou
+            df.loc[inds , cn.res] = [x.cont for x in ou]
 
             # break
 
         # break
 
     ##
-    da = pd.DataFrame()
-
-    for _ , ro in ds.iterrows() :
-        res = ro[c.res]
-        df = get_df_4_each_ro(res)
-
-        df[c.tid] = ro[c.tid]
-        df[c.ftic] = ro[c.ftic]
-
-        da = pd.concat([da , df])
+    df.to_parquet(fp.t0 , index = False)
 
     ##
-    db = da.pivot(index = [c.tid , c.ftic] , columns = 0 , values = 1)
-    ##
-    db.reset_index(inplace = True)
-    ##
-    db[c.obsd] = pd.to_datetime('today').date()
-    db[c.obsd] = db[c.obsd].astype(str)
+    df = pd.read_parquet(fp.t0)
 
     ##
+    df[cn.res] = df[cn.res].apply(lambda x : x.decode('utf-8'))
 
-    gd_trg = GithubData(gu.trg)
-    gd_trg.overwriting_clone()
+    ##
+    dfa = pd.DataFrame()
+
+    for _ , ro in df.iterrows() :
+        res = ro[cn.res]
+        _df = get_df_4_each_ro(res)
+
+        _df[c.tse_id] = ro[c.tse_id]
+        _df[c.tic] = ro[c.tic]
+
+        dfa = pd.concat([dfa , _df])
+
+    ##
+    dfb = dfa.pivot(index = [c.tse_id , c.tic] , columns = 0 , values = 1)
+
+    ##
+    dfb = dfb.reset_index()
+
+    ##
+    for col in dfb.columns :
+        if dfb[col].isna().all() :
+            dfb = dfb.drop(columns = [col])
+            print(col)
+
+    ##
+    dfb = dfb.astype('string')
+
+    ##
+    dfb[c.obsd] = pd.to_datetime('today').date()
+    dfb[c.obsd] = dfb[c.obsd].astype(str)
+
+    ##
+    gd_trg = GitHubDataRepo(gdu.trg)
+    gd_trg.clone_overwrite()
+
     ##
     dft = gd_trg.read_data()
+
     ##
-    dft = pd.concat([dft , db])
+    dft = pd.concat([dft , dfb])
+
     ##
     dft = dft.drop_duplicates()
-    ##
 
-    dftp = gd_trg.local_path / 'data.prq'
-    sprq(dft , dftp)
     ##
+    dft_fp = gd_trg.local_path / 'data.prq'
+    save_as_prq_wo_index(dft , dft_fp)
 
+    ##
     msg = 'data updated by: '
-    msg += gu.cur
-    ##
+    msg += gdu.slf
 
+    ##
     gd_trg.commit_and_push(msg)
 
     ##
-
     gd_trg.rmdir()
     gd_src.rmdir()
-
-    ##
+    rm_ns_module()
+    fp.t0.unlink()
 
 ##
+
+
 if __name__ == "__main__" :
     main()
-
-##
-# noinspection PyUnreachableCode
-if False :
-    pass
-
-    ##
-
-
-    ##
-
-
-    ##
-
-##
+    print(f'{Path(__file__).name} Done!')

@@ -1,6 +1,7 @@
 ## Manually add by me
 venv
 .idea
+ns.py
 
 # General
 .DS_Store
